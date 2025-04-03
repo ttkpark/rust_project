@@ -1,0 +1,26 @@
+[package]
+name = "stm32f103-blinky"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+stm32f1xx-hal = { version = "0.10", features = ["stm32f103", "rt"] }
+
+[build-dependencies]
+cc = "1.0"
+
+[profile.dev]
+opt-level = "s"
+#debug = true
+lto = false
+codegen-units = 1
+
+[profile.release]
+opt-level = "z"
+debug = false
+lto = true
+codegen-units = 1

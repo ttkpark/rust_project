@@ -1,0 +1,9 @@
+[build]
+target = "thumbv7m-none-eabi"
+
+#[target.thumbv7m-none-eabi]
+#runner = ""
+# manual binary update through STM32Programmer 
+
+[unstable]
+build-std = ["core"]
