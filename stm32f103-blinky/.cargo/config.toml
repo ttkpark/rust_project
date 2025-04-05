@@ -4,6 +4,7 @@ target = "thumbv7m-none-eabi"
 #[target.thumbv7m-none-eabi]
 #runner = ""
 # manual binary update through STM32Programmer 
+rustflags = [ "-C", "link-arg=-Tlink.x"]
 
 [unstable]
 build-std = ["core"]
