@@ -250,3 +250,13 @@ arm-none-eabi-objcopy -O binary target/thumbv7m-none-eabi/release/stm32f103-blin
 10. `stm32l1xx-hal` - For STM32L1 series
 11. `stm32l4xx-hal` - For STM32L4 series
 12. `stm32wlxx-hal` - For STM32WL series
+
+
+| pinmap | pinname |
+| -----  | -----   |
+| CS0-1 | PB0-1 | 
+| RS | PB3 | 
+| RW | PB4 | 
+| E  | PB5 | 
+| D0-1 | PA0-7 | 
+| BTN0-1 | PB8-9 | 
