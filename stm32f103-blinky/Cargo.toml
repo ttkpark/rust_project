@@ -8,6 +8,8 @@ build = "build.rs"
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
 panic-halt = "1.0.0"
+embedded-hal = "0.2.7"     # 직관적인 HAL trait 지원
+nb = "1.1.0"               # non-blocking trait (`nb::block!`)
 
 [dependencies.stm32f1xx-hal]
 version = "0.10"
