@@ -76,3 +76,7 @@ fn main() -> ! {
     }
 }
 ```
+```
+arm-none-eabi-objcopy -O binary target/thumbv7m-none-eabi/release/stm32f103-blinky firmware.bin
+arm-none-eabi-size target/thumbv7m-none-eabi/release/stm32f103-blinky
+```
