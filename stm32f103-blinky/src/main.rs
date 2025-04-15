@@ -138,6 +138,8 @@ fn TIM2(){
         writeln!(tx, "hello, Rust from STM32!").unwrap();
     }});
     
+    let tim2 = pac::Peripherals::take().unwrap().TIM2;
+    tim2.sr.modify(|_, w| w.uif().clear_bit());
 }
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

@@ -215,5 +215,38 @@ called `Result::unwrap()` on an `Err` value: TryFromIntError(())<\n>
 ```
  잘 보면 어느 스케일러 조합으로도 10Hz 타이머는 못 만들어내니까 나오는 에러다. 너무 추상화가 되어 있어서 오히려 불편하다.
 
+## 해결
+
+
 ```rust
+#[interrupt]
+fn TIM2() {
+    interrupt::free(|cs| {
+        ......
+
+        // 인터럽트 플래그 clear
+        let tim2 = unsafe { &*TIM2::ptr() };
+        tim2.sr.modify(|_, w| w.uif().clear_bit());
+    });
+}
+```
+- 인터럽트 플래그를 저렇게 두니까 이상했다.
+
+ 하지만, 주어진 코드도 동작하지 않았고, 컴파일 문제를 해결해 나갔다.
+ 1. TIM2가 존재하지 않았다 : `pac::Peripherals::take().unwrap()`를 pac로 저장하고 각종 컴포넌트(GPIO, UART 등)에 접근하는 핸들(GPIOA, UART1 등)을 보고 저것을 모방해서 가져와야되나 싶었다.
+```rust
+let tim2 = pac::Peripherals::take().unwrap().TIM2;
+tim2.sr.modify(|_, w| w.uif().clear_bit());
+```
+- 결론 성공! 이젠 500ms마다 깜빡인다.
+
+
+## 6. 빌드 및 플래시 명령어
+
+작성한 Rust 코드를 바이너리로 컴파일하고 보드에 업로드하는 명령어는 다음과 같습니다:
+
+```bash
+cargo build --release
+arm-none-eabi-objcopy -O binary target/thumbv7m-none-eabi/release/stm32f103-blinky firmware.bin
+arm-none-eabi-size target/thumbv7m-none-eabi/release/stm32f103-blinky
 ```
