@@ -10,16 +10,30 @@ use core::panic::PanicInfo;
 
 use stm32f1xx_hal::{
     gpio::{Output, PushPull, *},
-    pac::{self,interrupt,USART1}, 
+    pac::{self, interrupt, TIM2, USART1}, 
     prelude::*, 
     serial::{Config, Serial, Tx}, 
-    timer::{Event, SysDelay, Timer},
+    timer::{Counter, Event, SysDelay, Timer}, //Tim2NoRemap 뭔뜻이지
 };
 
 
 use core::fmt::Write; //write! 매크로 사용
 static global_LED   : Mutex<RefCell<Option<PC13<Output<PushPull>>>>> = Mutex::new(RefCell::new(None));
 static global_tx    : Mutex<RefCell<Option<Tx<USART1>>>> = Mutex::new(RefCell::new(None));
+
+// 글로벌 타이머 인스턴스 변수 선언
+static global_tim2: Mutex<RefCell<Option<Counter<TIM2,10000>>>> = Mutex::new(RefCell::new(None));
+
+// 출력용 매크로 정의
+macro_rules! println {
+    ($($arg:tt)*) => {
+        cortex_m::interrupt::free(|cs| {
+            if let Some(tx) = global_tx.borrow(cs).borrow_mut().as_mut() {
+                writeln!(tx, $($arg)*).ok();
+            }
+        })
+    };
+}
 
 #[entry]
 fn main() -> ! {
@@ -63,61 +77,54 @@ fn main() -> ! {
     );
     let (mut tx, _rx) = serial.split();
 
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "2").unwrap();
-    }});
     // critical section
     cortex_m::interrupt::free(|cs|{
         global_LED.borrow(cs).replace(Some(init_LED));
         global_tx.borrow(cs).replace(Some(tx));
+        //*GLOBAL_TX.borrow(cs).borrow_mut() = Some(tx); 
     });
+    
+    println!("2");
 
     //Timer 작성
-    let mut timer= dp.TIM2.counter::<100_000>(&clocks);
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "3").unwrap();
-    }});
+    let mut timer= dp.TIM2.counter::<10_000>(&clocks);
+
+    println!("3");
+
     timer.listen(Event::Update);
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "4").unwrap();
-    }});
+
+    println!("4");
+
+    let res = timer.start(1_500_000.micros());
+    if let Err(e) = res {
+        println!("Error : {0:?}",e);
+    }
+    
+    println!("5");
+
+    // critical section
+    cortex_m::interrupt::free(|cs|{
+        global_tim2.borrow(cs).replace(Some(timer));
+    });
+    
+    println!("6");
 
     unsafe {
         NVIC::unmask(pac::Interrupt::TIM2);//enables interrupt
     }
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "5").unwrap();
-    }});
     
-    let res = timer.start(10000.millis());
-    if let Err(e) = res {
-        cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-            writeln!(tx, "Error : {0:?}",e).unwrap();
-        }});
-    }
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "6").unwrap();
-    }});
+    println!("7");
 
     let mut delay: SysDelay = Timer::syst(cp.SYST, &clocks).delay();
+    
+    println!("8");
 
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "7").unwrap();
-    }});
-
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "PROGRAM STARTS!").unwrap();
-    }});
-
-    /*cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        
-    }});*/
+    
+    println!("PROGRAM STARTS!");
 
     loop {
         
-        cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-            writeln!(tx, "9").unwrap();
-        }});
+        println!("9");
         // rust는 소유권이란게 있어서, 1대1 대응하면 이전 변수는 더이상 사용할 수 없다. (A=B 했을 때 clone이 아니라 소유권 이전이 된다.)
         // 전역변수 LED를 꺼낼 땐 소유권 이전할 수도 없고 필요도 없어서 mutable 참조만 꺼낼 수가 있는데 그게 as_mut()이다.
 
@@ -134,21 +141,33 @@ fn main() -> ! {
 }
 #[interrupt]
 fn TIM2(){
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "hello, Rust from STM32!").unwrap();
+    println!("hello, Rust from STM32!");
+    /*
+    cortex_m::interrupt::free(|cs| {if let Some(ref mut timer) = global_tim2.borrow(cs).borrow_mut().as_mut(){
+        //timer.tim.sr.modify(|_, w|w.uif().clear_bit());
+        let _ = timer.wait();
     }});
+    */
     
-    let tim2 = pac::Peripherals::take().unwrap().TIM2;
-    tim2.sr.modify(|_, w| w.uif().clear_bit());
+    // TIM2 레지스터에 직접 접근하여 플래그 초기화
+    // SR 레지스터의 UIF(Update Interrupt Flag) 비트를 0으로 설정하여 초기화
+    /*unsafe {
+        (*stm32f1xx_hal::device::TIM2::ptr()).sr.modify(|_, w| w.uif().clear());
+    }*/
+    cortex_m::interrupt::free(|cs| {if let Some(ref mut timer) = global_tim2.borrow(cs).borrow_mut().as_mut(){
+        //timer.tim.sr.modify(|_, w|w.uif().clear_bit());
+        let res = timer.wait();
+        if let Err(e) = res {
+            println!("Error : {0:?}",e);
+        }
+    }});
+
 }
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     
     // logs "panicked at '$reason', src/main.rs:27:4" to the host stderr
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut tx) = global_tx.borrow(cs).borrow_mut().as_mut(){
-        writeln!(tx, "panic! {}",info).unwrap();
-    }});
-
+    println!("panic! {}",info);
 
     loop {}
 }
