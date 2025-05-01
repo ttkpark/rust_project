@@ -1,37 +1,45 @@
+
 #![no_std]
 #![no_main]
 
-use cortex_m::peripheral::NVIC;
-use core::cell::RefCell;
-use cortex_m::interrupt::Mutex;
 use cortex_m_rt::entry;
-//use panic_halt as _;
+use cortex_m::interrupt::Mutex;
+use core::cell::RefCell;
+use core::fmt::Write;
+
+use cortex_m::peripheral::NVIC;
 use core::panic::PanicInfo;
 
 use stm32f1xx_hal::{
-    gpio::{Output, PushPull, *},
-    pac::{self, interrupt, TIM2, USART1}, 
-    prelude::*, 
-    serial::{Config, Serial, Tx}, 
-    timer::{Counter, Event, SysDelay, Timer}, //Tim2NoRemap 뭔뜻이지
+    pac::{self, interrupt, EXTI, USART1, TIM2},
+    prelude::*,
+    gpio::{Edge, ExtiPin, Input, PullUp, gpiob::PB0, gpioc::PC13, Output, PushPull},
+    serial::{Serial, Config, Tx},
+    timer::{Timer, Event, Counter, SysDelay},
 };
 
-
-use core::fmt::Write; //write! 매크로 사용
-static global_LED   : Mutex<RefCell<Option<PC13<Output<PushPull>>>>> = Mutex::new(RefCell::new(None));
-static global_tx    : Mutex<RefCell<Option<Tx<USART1>>>> = Mutex::new(RefCell::new(None));
-
-// 글로벌 타이머 인스턴스 변수 선언
-static global_tim2: Mutex<RefCell<Option<Counter<TIM2,10000>>>> = Mutex::new(RefCell::new(None));
+// 전역 자원 선언
+static GLOBAL_LED: Mutex<RefCell<Option<PC13<Output<PushPull>>>>> = Mutex::new(RefCell::new(None));
+static GLOBAL_TX: Mutex<RefCell<Option<Tx<USART1>>>> = Mutex::new(RefCell::new(None));
+static GLOBAL_BTN: Mutex<RefCell<Option<PB0<Input<PullUp>>>>> = Mutex::new(RefCell::new(None));
+static LAST_TICK: Mutex<RefCell<u32>> = Mutex::new(RefCell::new(0));
+static GLOBAL_TIMER: Mutex<RefCell<Option<Counter<TIM2, 1_0000>>>> = Mutex::new(RefCell::new(None));
+static GLOBAL_TICK: Mutex<RefCell<u32>> = Mutex::new(RefCell::new(0));
 
 // 출력용 매크로 정의
 macro_rules! println {
     ($($arg:tt)*) => {
         cortex_m::interrupt::free(|cs| {
-            if let Some(tx) = global_tx.borrow(cs).borrow_mut().as_mut() {
+            if let Some(tx) = GLOBAL_TX.borrow(cs).borrow_mut().as_mut() {
                 writeln!(tx, $($arg)*).ok();
             }
         })
+    };
+}
+
+macro_rules! getTick {
+    ($timer:ident,$tickref:ident) => {
+        ($timer).now().ticks() + *($tickref)*10000
     };
 }
 
@@ -52,18 +60,32 @@ fn main() -> ! {
         .pclk1(36.MHz())
         .freeze(&mut flash.acr);
 
-    // GPIOC에서 PC13 (LED 핀) 설정
-    let mut gpioc = dp.GPIOC.split();
-    let mut init_LED: PC13<Output<PushPull>> = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
-
     // GPIO 설정
     let mut afio = dp.AFIO.constrain();
     let mut gpioa = dp.GPIOA.split();
+    let mut gpiob = dp.GPIOB.split();
+    let mut gpioc = dp.GPIOC.split();
+
+    // GPIOC에서 PC13 (LED 핀) 설정
+    let mut init_LED: PC13<Output<PushPull>> = gpioc.pc13.into_push_pull_output(&mut gpioc.crh);
 
     //PA9 = TX, PA10 = RX
     let pin_tx = gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh);
     let pin_rx  = gpioa.pa10;
+    let mut button = gpiob.pb0.into_pull_up_input(&mut gpiob.crl);
     
+
+    // 버튼 EXTI 설정
+    let mut exti = dp.EXTI;
+    button.make_interrupt_source(&mut afio);
+    button.trigger_on_edge(&mut exti, Edge::Falling);
+    button.enable_interrupt(&mut exti);
+
+    // NVIC 등록
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(pac::Interrupt::EXTI0);
+    }
+
     // UART 설정
     let serial = Serial::new(
         dp.USART1,       // 통신 레지스터 인스턴스
@@ -75,45 +97,26 @@ fn main() -> ! {
             .parity_none(),          // parity 설정은 없다.
         &clocks           // 시간 객체 (baud pres 시간 계산 시 필요할 것으로 추정정)
     );
-    let (mut tx, _rx) = serial.split();
+    let (tx, rx) = serial.split();
 
-    // critical section
-    cortex_m::interrupt::free(|cs|{
-        global_LED.borrow(cs).replace(Some(init_LED));
-        global_tx.borrow(cs).replace(Some(tx));
-        //*GLOBAL_TX.borrow(cs).borrow_mut() = Some(tx); 
-    });
-    
     println!("2");
-
-    //Timer 작성
-    let mut timer= dp.TIM2.counter::<10_000>(&clocks);
-
-    println!("3");
+    let mut timer = dp.TIM2.counter::<10_000>(&clocks); // 1 kHz → 1ms per tick
+    timer.start(1.secs()).unwrap();
 
     timer.listen(Event::Update);
-
-    println!("4");
-
-    let res = timer.start(1_500_000.micros());
-    if let Err(e) = res {
-        println!("Error : {0:?}",e);
+    unsafe {
+        NVIC::unmask(pac::Interrupt::TIM2);
     }
-    
-    println!("5");
-
     // critical section
     cortex_m::interrupt::free(|cs|{
-        global_tim2.borrow(cs).replace(Some(timer));
+        GLOBAL_LED.borrow(cs).replace(Some(init_LED));
+        GLOBAL_TX.borrow(cs).replace(Some(tx));
+        GLOBAL_BTN.borrow(cs).replace(Some(button));
+        GLOBAL_TIMER.borrow(cs).replace(Some(timer));
     });
-    
-    println!("6");
+    println!("3");
 
-    unsafe {
-        NVIC::unmask(pac::Interrupt::TIM2);//enables interrupt
-    }
-    
-    println!("7");
+    println!("4");
 
     let mut delay: SysDelay = Timer::syst(cp.SYST, &clocks).delay();
     
@@ -130,8 +133,8 @@ fn main() -> ! {
 
         // static mut와 static의 차이때문에 unsafe가 생기고, 이걸 허용하지 않는 것이 rust이다.
         cortex_m::interrupt::free(|cs| {
-        if let Some(ref mut led) = global_LED.borrow(cs).borrow_mut().as_mut(){
-            led.toggle();
+        if let Some(ref mut led) = GLOBAL_LED.borrow(cs).borrow_mut().as_mut(){
+           // led.toggle();
         }
         });
         //init_LED.toggle();
@@ -139,30 +142,58 @@ fn main() -> ! {
         delay.delay_ms(500u16);
     }
 }
-#[interrupt]
-fn TIM2(){
-    println!("hello, Rust from STM32!");
-    /*
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut timer) = global_tim2.borrow(cs).borrow_mut().as_mut(){
-        //timer.tim.sr.modify(|_, w|w.uif().clear_bit());
-        let _ = timer.wait();
-    }});
-    */
-    
-    // TIM2 레지스터에 직접 접근하여 플래그 초기화
-    // SR 레지스터의 UIF(Update Interrupt Flag) 비트를 0으로 설정하여 초기화
-    /*unsafe {
-        (*stm32f1xx_hal::device::TIM2::ptr()).sr.modify(|_, w| w.uif().clear());
-    }*/
-    cortex_m::interrupt::free(|cs| {if let Some(ref mut timer) = global_tim2.borrow(cs).borrow_mut().as_mut(){
-        //timer.tim.sr.modify(|_, w|w.uif().clear_bit());
-        let res = timer.wait();
-        if let Err(e) = res {
-            println!("Error : {0:?}",e);
-        }
-    }});
 
+#[interrupt]
+fn EXTI0(){    
+
+    cortex_m::interrupt::free(|cs| {
+        if let (
+                Some(btn),
+                Some(led),
+                Some(tx),
+                Some(timer)
+            ) = (
+                GLOBAL_BTN.borrow(cs).borrow_mut().as_mut(),
+                GLOBAL_LED.borrow(cs).borrow_mut().as_mut(),
+                GLOBAL_TX.borrow(cs).borrow_mut().as_mut(),
+                GLOBAL_TIMER.borrow(cs).borrow_mut().as_mut()
+            ) {
+
+            btn.clear_interrupt_pending_bit();
+            
+            let mut last_tick_ref = LAST_TICK.borrow(cs).borrow_mut();
+            
+            let global_tick = GLOBAL_TICK.borrow(cs).borrow_mut();
+            let tick = getTick!(timer,global_tick);
+            let diff = tick.wrapping_sub(*last_tick_ref);
+
+            // 매우 단순한 디바운싱: 50ms 이하면 무시
+            if diff < 500 {
+                return;
+            }
+
+            *last_tick_ref = tick;
+
+            led.toggle();
+
+            writeln!(tx, "Button pressed! {tick}").ok();
+        }
+
+    });
 }
+
+
+#[interrupt]
+fn TIM2() {
+    cortex_m::interrupt::free(|cs| {
+        if let Some(timer) = GLOBAL_TIMER.borrow(cs).borrow_mut().as_mut() {
+            timer.clear_interrupt(Event::Update);
+        }
+        let mut tick_ref = GLOBAL_TICK.borrow(cs).borrow_mut();
+        *tick_ref = *tick_ref+1
+    });
+}
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     

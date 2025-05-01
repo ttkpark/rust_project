@@ -485,3 +485,60 @@ cargo build --release
 arm-none-eabi-objcopy -O binary target/thumbv7m-none-eabi/release/stm32f103-blinky firmware.bin
 arm-none-eabi-size target/thumbv7m-none-eabi/release/stm32f103-blinky
 ```
+
+## Set of Using Timer
+```rust
+
+#[interrupt]
+
+
+
+
+    //Timer 작성
+    let mut timer= dp.TIM2.counter::<10_000>(&clocks);
+
+    timer.listen(Event::Update);
+
+
+    let res = timer.start(1_500_000.micros());
+    if let Err(e) = res {
+        println!("Error : {0:?}",e);
+    }
+
+    // critical section
+    cortex_m::interrupt::free(|cs|{
+        global_tim2.borrow(cs).replace(Some(timer));
+    });
+
+
+    unsafe {
+        NVIC::unmask(pac::Interrupt::TIM2);//enables interrupt
+    }
+    
+
+
+fn TIM2(){
+    println!("hello, Rust from STM32!");
+    /*
+    cortex_m::interrupt::free(|cs| {if let Some(ref mut timer) = global_tim2.borrow(cs).borrow_mut().as_mut(){
+        //timer.tim.sr.modify(|_, w|w.uif().clear_bit());
+        let _ = timer.wait();
+    }});
+    */
+    
+    // TIM2 레지스터에 직접 접근하여 플래그 초기화
+    // SR 레지스터의 UIF(Update Interrupt Flag) 비트를 0으로 설정하여 초기화
+    /*unsafe {
+        (*stm32f1xx_hal::device::TIM2::ptr()).sr.modify(|_, w| w.uif().clear());
+    }*/
+    cortex_m::interrupt::free(|cs| {if let Some(ref mut timer) = global_tim2.borrow(cs).borrow_mut().as_mut(){
+        //timer.tim.sr.modify(|_, w|w.uif().clear_bit());
+        let res = timer.wait();
+        if let Err(e) = res {
+            println!("Error : {0:?}",e);
+        }
+    }});
+
+}
+
+```
